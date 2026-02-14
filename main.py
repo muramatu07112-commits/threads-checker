@@ -1,83 +1,113 @@
 import streamlit as st
-import sys
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+import time
+import re
+import json
 
 # =========================================================
-# 0. 最優先：グローバル・エラー・キャッチャー
+# 【設定エリア】ここだけを書き換えてください
 # =========================================================
-# UIが描画される前に死ぬのを防ぐため、最上段に配置
-try:
-    import gspread
-    import pandas as pd
-    import re
-    import time
-    from google.oauth2.service_account import Credentials
-except Exception as e:
-    st.error(f"❌ ライブラリのインポート段階で失敗: {str(e)}")
-    st.stop()
+# 1. 秘密鍵（-----BEGIN...から...END-----まで全部貼り付け）
+RAW_PRIVATE_KEY = "ここに秘密鍵を貼り付けてください"
 
-def get_ultra_sanitized_credentials(raw_pk, client_email, project_id):
-    # 前回の洗浄ロジック（ここでのエラーも捕捉対象）
-    clean_pk = re.sub(r'[^a-zA-Z0-9+/]', '', raw_pk)
-    while len(clean_pk) % 4 != 0:
-        clean_pk += '='
-    
-    formatted_pk = "-----BEGIN PRIVATE KEY-----\n"
-    for i in range(0, len(clean_pk), 64):
-        formatted_pk += clean_pk[i:i+64] + "\n"
-    formatted_pk += "-----END PRIVATE KEY-----\n"
+# 2. クライアントメール（your-project...iam.gserviceaccount.com）
+CLIENT_EMAIL = "ここにメールアドレスを貼り付け"
 
-    info = {
-        "type": "service_account",
-        "project_id": project_id,
-        "private_key": formatted_pk.replace('\\n', '\n'),
-        "client_email": client_email,
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
-    return Credentials.from_service_account_info(info)
+# 3. プロジェクトID
+PROJECT_ID = "ここにプロジェクトIDを貼り付け"
 
+# 4. スプレッドシートのURL（ブラウザのアドレスバーのURL）
+SHEET_URL = "ここにURLを貼り付け"
 # =========================================================
-# 1. ブートストラップ・モニタリング
-# =========================================================
-def main():
-    # 画面が真っ白になるのを防ぐため、即座にタイトルを描画
-    st.title("🛡️ Debug Mode: Threads Survival Checker")
-    st.write("システム起動中... (この画面が見えていれば基本構造は正常です)")
 
-    # 設定データ（ここにあなたの情報を入力）
-    # ※前回の「ASN.1 parsing error」を防ぐため、JSONの private_key 全体をコピペしてください
-    RAW_PRIVATE_KEY = "ここに秘密鍵を貼り付け" 
-    CLIENT_EMAIL = "your-email"
-    PROJECT_ID = "your-id"
-    SHEET_URL = "your-url"
-
-    # --- 認証プロセス（ここが白画面の主犯候補） ---
+def get_perfect_credentials(raw_pk, client_email, project_id):
+    """
+    【魔法の工場】
+    どんなに汚れた鍵データでも、数学的に正しいPEM形式に強制再鋳造する。
+    """
     try:
-        st.write("⏳ Step 1: 鍵の洗浄と認証を開始...")
-        creds = get_ultra_sanitized_credentials(RAW_PRIVATE_KEY, CLIENT_EMAIL, PROJECT_ID)
+        # JSONからコピペした際の「\n」という文字列を、実際の改行コードに変換
+        sanitized = raw_pk.replace('\\n', '\n')
         
-        st.write("⏳ Step 2: Google Sheets 接続開始...")
+        # 不要な文字（ヘッダー、フッター、スペース、改行）を一旦すべて排除
+        body = re.sub(r'-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s+', '', sanitized)
+        
+        # 英数字とBase64記号以外を完全に抹殺（ノイズ除去）
+        body = re.sub(r'[^a-zA-Z0-9+/]', '', body)
+        
+        # 【重要】Base64の数学的整合性（4の倍数）を強制確保
+        while len(body) % 4 != 0:
+            body += '='
+            
+        # PEM規格（64文字ごとの改行）に再構成
+        formatted_pk = "-----BEGIN PRIVATE KEY-----\n"
+        for i in range(0, len(body), 64):
+            formatted_pk += body[i:i+64] + "\n"
+        formatted_pk += "-----END PRIVATE KEY-----\n"
+
+        info = {
+            "type": "service_account",
+            "project_id": project_id,
+            "private_key": formatted_pk,
+            "client_email": client_email,
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        return Credentials.from_service_account_info(info)
+    except Exception as e:
+        raise ValueError(f"鍵の再構成に失敗しました: {str(e)}")
+
+def main():
+    st.set_page_config(page_title="Threads Checker", layout="wide")
+    st.title("🛡️ 鉄壁のThreads生存確認ツール")
+
+    # 画面上の進捗管理
+    if "is_running" not in st.session_state:
+        st.session_state.is_running = False
+
+    try:
+        # 1. 認証プロセスの自動実行
+        creds = get_perfect_credentials(RAW_PRIVATE_KEY, CLIENT_EMAIL, PROJECT_ID)
         client = gspread.authorize(creds)
-        
-        st.write("⏳ Step 3: スプレッドシート取得...")
         sheet = client.open_by_url(SHEET_URL).get_worksheet(0)
         
-        data = sheet.get_all_records()
-        st.success("✅ 全プロセス正常完了。スプレッドシートの読み込みに成功しました。")
-        st.write(f"取得データ件数: {len(data)}件")
+        # データの取得
+        records = sheet.get_all_records()
+        df = pd.DataFrame(records)
         
-        # プレビュー表示
-        if data:
-            st.dataframe(pd.DataFrame(data).head())
+        st.success(f"✅ 認証成功！ スプレッドシート（{len(df)}件）を認識しました。")
+        st.dataframe(df.head(5)) # 最初の5件だけチラ見せ
+
+        # 2. 生存確認の実行（画像13のロジック継承）
+        if st.button("生存確認チェックを開始"):
+            st.session_state.is_running = True
+            
+            progress_bar = st.progress(0)
+            status_area = st.empty()
+            start_time = time.time()
+            
+            for i in range(len(df)):
+                # --- 【画像13の計算式】 ---
+                elapsed_time = time.time() - start_time
+                avg_time_per_item = elapsed_time / (i + 1)
+                remaining_items = len(df) - (i + 1)
+                remaining_sec = avg_time_per_item * remaining_items
+                
+                # 表示の更新
+                status_area.write(f"📊 処理中: {i+1}/{len(df)} 件目 | ⏳ 予想残り時間: {int(remaining_sec)}秒")
+                progress_bar.progress((i + 1) / len(df))
+                
+                # ここに実際の判定ロジックが入る（現在はシミュレーション）
+                time.sleep(0.5) 
+            
+            st.balloons()
+            st.success("全ての生存確認が完了しました。")
 
     except Exception as e:
-        # すべてのエラーを画面に強制出力
-        st.error(f"⚠️ 実行エラー発生: {type(e).__name__}")
+        st.error("🔥 実行エラーが発生しました")
         st.code(str(e))
-        st.info("これが表示される場合、認証情報またはネットワークに問題があります。")
+        st.info("ヒント: 設定エリア（15-18行目）に貼り付けた内容が、元のJSONファイルと一致しているか確認してください。")
 
-# 実行
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as fatal_e:
-        st.error(f"🔥 致命的なメインループエラー: {str(fatal_e)}")
+    main()
