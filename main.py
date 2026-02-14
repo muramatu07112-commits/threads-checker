@@ -8,127 +8,141 @@ import requests
 from datetime import datetime
 
 # =========================================================
-# 【設定】UI・スコープ定義
+# 1. 判定ロジックの高度化（シグネチャ分析）
 # =========================================================
-def initialize_ui():
-    st.set_page_config(page_title="Threads Survival Checker", layout="wide")
-    st.title("🛡️ 鉄壁のThreads生存確認システム (実戦稼働版)")
-    st.sidebar.header("⚙️ システム設定")
-    raw_json = st.sidebar.text_area("1. JSONファイルの中身を全部貼り付け", height=200)
-    sheet_url = st.sidebar.text_area("2. スプレッドシートのURLを貼り付け", height=100)
-    # ユーザー名が入っている列名（シートの1行目の名前に合わせてください）
-    target_column = st.sidebar.text_input("3. ユーザー名(ID)が入っている列名", value="username")
-    return raw_json, sheet_url, target_column
-
-def get_creds_with_scopes(json_str):
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    try:
-        info = json.loads(json_str.strip())
-        if "private_key" in info:
-            info["private_key"] = info["private_key"].replace('\\n', '\n')
-        return Credentials.from_service_account_info(info, scopes=SCOPES)
-    except: return None
-
-# =========================================================
-# 【核心】Threads生存判定ロジック
-# =========================================================
-def check_threads_status(username):
-    """
-    Threadsのプロフィールページにアクセスし、生存を確認する。
-    """
+def check_threads_strict(username, proxy_str=None):
     url = f"https://www.threads.net/@{username}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8"
     }
+    
+    proxies = None
+    if proxy_str:
+        # 形式 ip:port:user:pass を想定
+        parts = proxy_str.split(':')
+        if len(parts) == 4:
+            p = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+            proxies = {"http": p, "https": p}
+
     try:
-        # プロキシ補正（将来的にここにプロキシ設定を追加可能）
-        response = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
         
-        if response.status_code == 200:
-            return "生存"
-        elif response.status_code == 404:
-            return "凍結/削除"
-        elif response.status_code == 429:
-            return "制限(要待機)"
+        # 1. プロキシ自体のブロック判定
+        if resp.status_code in [403, 407]:
+            return "プロキシブロック", False
+            
+        # 2. コンテンツによる厳密判定
+        # 生存していれば、ソース内に必ずユーザー名が含まれる。
+        # 凍結/削除時は "Page not found" や "unavailable" が含まれる。
+        content = resp.text.lower()
+        if resp.status_code == 200 and username.lower() in content:
+            if "page not found" in content or "unavailable" in content:
+                return "凍結/削除", True
+            return "生存", True
+        elif resp.status_code == 404 or "page not found" in content:
+            return "凍結/削除", True
         else:
-            return f"エラー({response.status_code})"
+            return f"エラー({resp.status_code})", False
+
     except Exception as e:
-        return "通信エラー"
+        return f"通信失敗: {type(e).__name__}", False
 
 # =========================================================
-# メイン実行ループ
+# 2. メインシステム
 # =========================================================
 def main():
-    raw_json, sheet_url, target_col = initialize_ui()
+    st.set_page_config(page_title="Threads Pro Checker", layout="wide")
+    
+    # 中断フラグの管理
+    if "stop_requested" not in st.session_state:
+        st.session_state.stop_requested = False
+
+    st.title("🛡️ 鉄壁のThreads生存確認 (プロキシ・厳密判定版)")
+    
+    # 設定エリア
+    with st.sidebar:
+        raw_json = st.text_area("1. Service Account JSON")
+        sheet_url = st.text_area("2. Spreadsheet URL")
+        user_col = st.text_input("ID列名", "username")
+        proxy_col = st.text_input("プロキシ列名", "proxy")
+        if st.button("🔴 緊急停止リセット"):
+            st.session_state.stop_requested = False
+            st.rerun()
+
     if not raw_json or not sheet_url:
-        st.warning("👈 左側のサイドバーに設定を入力してください。")
+        st.info("サイドバーに設定を入力してください。")
         return
 
     try:
-        creds = get_creds_with_scopes(raw_json)
-        if not creds: return
+        # 認証
+        info = json.loads(raw_json)
+        info["private_key"] = info["private_key"].replace('\\n', '\n')
+        creds = Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
         client = gspread.authorize(creds)
-        spreadsheet = client.open_by_url(sheet_url)
-        sheet = spreadsheet.get_worksheet(0)
+        sheet = client.open_by_url(sheet_url).get_worksheet(0)
         
-        # 全データ読み込み
-        records = sheet.get_all_records()
-        df = pd.DataFrame(records)
-        
-        if target_col not in df.columns:
-            st.error(f"❌ 列名 '{target_col}' が見つかりません。現在の列名: {list(df.columns)}")
-            return
+        df = pd.DataFrame(sheet.get_all_records())
+        st.write(f"📊 読込データ: {len(df)}件")
 
-        st.success(f"✅ 接続成功！ 対象データ: {len(df)}件")
-        st.dataframe(df.head(10))
+        # 実行コントロール
+        col1, col2 = st.columns(2)
+        start_btn = col1.button("🚀 調査開始", use_container_width=True)
+        stop_btn = col2.button("⏹️ 中断（次の処理で停止）", use_container_width=True)
 
-        if st.button("🚀 生存確認チェックを開始"):
+        if stop_btn:
+            st.session_state.stop_requested = True
+
+        if start_btn:
+            st.session_state.stop_requested = False
             progress_bar = st.progress(0)
             status_text = st.empty()
             start_time = time.time()
             
-            # 結果を格納するリスト
-            results = []
-            
-            # スプレッドシートの「結果」列のインデックスを探す（なければ作成）
+            # 列の準備
             headers = sheet.row_values(1)
-            if "判定結果" not in headers:
-                sheet.update_cell(1, len(headers) + 1, "判定結果")
-                sheet.update_cell(1, len(headers) + 2, "確認日時")
-                result_col_idx = len(headers) + 1
-                time_col_idx = len(headers) + 2
-            else:
-                result_col_idx = headers.index("判定結果") + 1
-                time_col_idx = headers.index("確認日時") + 1
+            for h in ["判定結果", "確認日時"]:
+                if h not in headers:
+                    sheet.update_cell(1, len(headers)+1, h)
+                    headers = sheet.row_values(1)
+            
+            res_idx = headers.index("判定結果") + 1
+            time_idx = headers.index("確認日時") + 1
 
             for i, row in df.iterrows():
-                username = str(row[target_col]).replace("@", "").strip()
-                
-                # 実際の判定を実行
-                status = check_threads_status(username)
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                
-                # スプレッドシートに即時書き込み（i+2 はヘッダーの次から）
-                sheet.update_cell(i + 2, result_col_idx, status)
-                sheet.update_cell(i + 2, time_col_idx, now_str)
+                if st.session_state.stop_requested:
+                    st.error("⏹️ 中断リクエストを受け付けました。停止します。")
+                    break
 
-                # 画像13の「予想残り時間」ロジック
+                user = str(row.get(user_col, "")).replace("@", "").strip()
+                proxy = str(row.get(proxy_col, ""))
+                
+                # 判定実行
+                status, is_valid_proxy = check_threads_strict(user, proxy)
+                
+                # 結果書き込み
+                sheet.update_cell(i + 2, res_idx, status)
+                sheet.update_cell(i + 2, time_idx, datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+                # プロキシブロックの即時報告
+                if not is_valid_proxy and "プロキシ" in status:
+                    st.sidebar.warning(f"⚠️ プロキシ停止報告: 行 {i+2} のプロキシがブロックされました")
+
+                # 時間計算（画像13ロジック）
                 elapsed = time.time() - start_time
                 avg = elapsed / (i + 1)
                 rem = avg * (len(df) - (i + 1))
                 
-                status_text.markdown(f"**処理中**: `{username}` -> **{status}** ({i+1}/{len(df)})  \n⏳ **予想残り時間**: `{int(rem)}`秒")
+                status_text.markdown(f"**進行中**: `{user}` | 結果: **{status}** | 残り約 `{int(rem)}`秒")
                 progress_bar.progress((i + 1) / len(df))
                 
-                # Metaのブロックを避けるための適度なインターバル
-                time.sleep(1.5) 
+                time.sleep(2) # BAN回避のためのインターバル
 
-            st.balloons()
-            st.success("完了しました！ スプレッドシートを確認してください。")
+            if not st.session_state.stop_requested:
+                st.balloons()
+                st.success("全ての工程が完了しました。")
 
     except Exception as e:
-        st.error(f"🔥 エラー: {str(e)}")
+        st.error(f"🔥 システムエラー: {e}")
 
 if __name__ == "__main__":
     main()
