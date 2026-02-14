@@ -8,25 +8,31 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定 (強制整形ロジック) ---
+# --- 1. Google接続設定 (n混入防止・完全修正版) ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    
+    # Secretsから読み込み
     sa_info = dict(st.secrets["gcp_service_account"])
-    
-    # 【ここが修正ポイント】鍵データを一度「生の英数字」に戻してから、正しい形に組み直します
     raw_key = sa_info["private_key"]
+
+    # 【重要修正】ここで "\n" という文字自体を先に消去します
+    # これをしないと、後の処理で "n" が暗号キーに混ざり込みます
+    raw_key = raw_key.replace("\\n", "")
+
+    # 1. ヘッダー・フッターを削除
+    raw_key = raw_key.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
     
-    # 1. ヘッダー、フッター、改行文字(\n)、スペースをすべて削除して、純粋なBase64文字列だけにする
-    # ※ 正規表現で a-z, A-Z, 0-9, +, /, = 以外をすべて削除
-    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_key)
-    
-    # 2. 64文字ごとに改行を入れて、正しいPEM形式に再構築する
+    # 2. 全ての空白・改行・タブを削除して、純粋なBase64文字列にする
+    raw_key = re.sub(r"\s+", "", raw_key)
+
+    # 3. 64文字ごとに改行を入れて、正しいPEM形式に再構築する
     formatted_key = "-----BEGIN PRIVATE KEY-----\n"
-    for i in range(0, len(clean_body), 64):
-        formatted_key += clean_body[i:i+64] + "\n"
+    for i in range(0, len(raw_key), 64):
+        formatted_key += raw_key[i:i+64] + "\n"
     formatted_key += "-----END PRIVATE KEY-----\n"
     
-    # 3. 整形した鍵をセット
+    # 整形した鍵をセット
     sa_info["private_key"] = formatted_key
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
