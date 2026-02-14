@@ -8,18 +8,26 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（Secrets不使用・自動洗浄版） ---
+# --- 1. Google接続設定（徹底洗浄・自己修復版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
-    # あなたの秘密鍵（Base64部分のみ）。
-    # ここに改行やスペースが混ざっていても、下の洗浄処理で物理的に排除します。
-    raw_key_data = "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCVa+ODKkA7W/Js71Bk8mi/fhR6LB6n7punbUFj5yB3pdGrmdw96zE+EnfjB/adIXl2Ns77zN7brGTvXp6Q5T6W7KIRoidR/laIarm6hrXloAiqFmkP3O0gseD9wDMMUHEFD8tcgUZPSQ9Pa5jYl2ndc+/KTvMKbW7NgOKbiikK8BcmLlmNE032SHMjznfkWbvtFCIYmFUn+aixKODS/NZP4wuV/QBlRuLz0XCN7e5ImNtODN3IqKWzKdkZMSSDQIYIabcBkdH0cKrDD94C5H14UhZ5B/rERQ2NixtEZvDfCAqAPgKBoLZLBCJnnCCxra1FvXZDMNauZE/R3zUVaMXDAgMBAAECggEAGCm4Qu/EL1UxINiaYZipw725xf/4fSOi3DJYzrUDlRWlnkGBzMzgjYGxQItCY2tQc9jbqxeFdcJyyPdtJPRk1Q+bEVqGoRiQhDjJkEnvSUm3MnuOSi3MPXPOBHCAHav3UKsczaD/1/xzaDWU6HCw+BOSSUdFzMBLWpo2XiP1DaTkBB3JYJHgHdQVekOY2975FkmzcE+rDO9XOkLajG30HPDDVfyhC2DFIngYUx9sdz08aOjrgV/2z4bQDe2FMwLGMdiyPcxlKOakVAQCUZtgERj/p+J3mS9KliQ819sMsfDUmbibJD4ORu3OObOIN/wn/r6LJ0Q9QpVXJXtHEvFq9o0QKBgQDDxYN5beRdmFIfncJbcE5vMmR6IbJh7arGj/ADlkQMhmZZiovbvJmYNG9YpkijlP0Vhk5fGshiPb5RQ82sL67k+8kCQznr599ZimD3DGK/XLNIgMCxOP/OqrSxcFfnMdeAjB0hqW6Ic/fNDHlezwfUuVeeoLogDdjlVPd+0EyZ1wKBgQDDY/SCNEWEmrc+F81qcaURxm9NGTRFTUelRlmnkBcVfW91VNB1Q9jTCnEIsAFn/yhZfAZ1/rmqps+WGs+HmlyV1cLEcKzofjQEIbPuFhVX20TMR5yYF460TS0MGR+1defoV8yCqI3IluCoWfV7vOBXNHaI4X/Q6vOL8s+RXQ9t9QKBgB2AYjOmT8ea8KU7DNLita8kFOgis9L2EcoiXrTrrA2HI11S94iBf1PkcvMU+9VK2min+J90VcYYL9nnMdNEzEJNfxkMMGpQYuQHal1QTIEx4wKGBIOwZzwplVk36Mc6R5NjifBMrA98CleoDZIv+Koh1AZfiizSaWEF0NYXZbO5AoGAfNYQEmBzShXPncx3YdraLFEsK4Y+70hAzkf0YCqflQtfeweFaGbA0ZWKQpKxU1Ci5wlm11y4I2AQoUbf8TOek9zPY9LZpnF7qmgeHa/eUxO1EQ9v7XyfoHLupRwoNjfuw3PVJmWqsKffgbB4N2alrxHF6g6pK0Hx+ShZlfZvNUECgYAUbMfOwp2JzY4fDa7XQQJJt4jjlt1QCFRpjT7Vzgw5hafWmCd5U0wTDSFj+bm5Fbjgi7FMJozXnc+CJzC0Q6+27wFB7G0wwrgeASi0uwDFm/1gN7jPPy0LQDogUvO8RlKRMP+xRD5QZl7yyXalm3j8u5hq+b3LbwGqIT+3NtCRQQ=="
+    # Secretsから保存されている鍵データを取得（どの名前で保存していても対応）
+    raw_key = ""
+    target_keys = ["pk_base64", "pk_data", "pk_raw", "threads_key", "gcp_service_account"]
+    for k in target_keys:
+        if k in st.secrets:
+            raw_key = str(st.secrets[k])
+            break
+            
+    if not raw_key:
+        raw_key = str(st.secrets)
 
-    # 英数字、プラス、スラッシュ、イコール以外を全て抹殺（徹底洗浄）
-    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_key_data)
-
-    # 64文字ごとに改行を入れてPEM形式を再構築
+    # 【徹底洗浄ロジック】英数字、プラス、スラッシュ、イコール以外を全て抹殺
+    # これにより、コピペで混入したスペース、改行、バックスラッシュを物理的に消滅させます
+    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_key.replace("PRIVATE KEY", ""))
+    
+    # 【PEM再構築】正しいPEM形式（64文字ごとの改帰）に強制的に組み直す
     formatted_key = "-----BEGIN PRIVATE KEY-----\n"
     for i in range(0, len(clean_body), 64):
         formatted_key += clean_body[i:i+64] + "\n"
@@ -36,8 +44,7 @@ try:
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
         "token_uri": "https://oauth2.googleapis.com/token",
         "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/checker-bot%40threads-checker.iam.gserviceaccount.com",
-        "universe_domain": "googleapis.com"
+        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/checker-bot%40threads-checker.iam.gserviceaccount.com"
     }
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
@@ -56,22 +63,31 @@ except Exception as e:
     st.error(f"❌ 接続エラー: {e}")
     st.stop()
 
-# --- 2. 調査実行セクション ---
+# --- 2. 調査実行セクション（画像13のロジックを最適化） ---
+#
 all_rows = list_ws.get_all_values()
 if len(all_rows) > 1:
     targets = all_rows[1:]
     proxy_list = [r[0] for r in proxy_ws.get_all_values()[1:] if r] if proxy_ws else []
 
+    st.sidebar.write(f"📊 調査対象: {len(targets)} 件")
+    
     if st.button("🚀 凍結確認を開始"):
         progress_bar = st.progress(0)
+        status_text = st.empty()
+        time_text = st.empty()
         start_time = time.time()
+        
         for i, row in enumerate(targets):
+            # 残り時間計算ロジック
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
-            st.info(f"⏳ 予想残り時間: 約 {rem // 60}分 {rem % 60}秒")
+            time_text.info(f"⏳ 予想残り時間: 約 {rem // 60}分 {rem % 60}秒")
             
             target_id = row[0]
+            status_text.text(f"調査中: {target_id}")
+            
             p_config = None
             if proxy_list:
                 p = proxy_list[i % len(proxy_list)]
@@ -82,9 +98,14 @@ if len(all_rows) > 1:
                 res = requests.get(f"https://www.threads.net/@{target_id}", proxies=p_config, timeout=10)
                 result = "生存" if res.status_code == 200 else "凍結/削除"
             except:
-                result = "エラー"
+                result = "通信エラー"
             
             list_ws.update_cell(i + 2, 2, result)
             progress_bar.progress((i + 1) / len(targets))
             time.sleep(1)
-        st.success("✅ 調査が完了しました！")
+            
+        time_text.empty()
+        st.success("✅ 調査完了！")
+        st.balloons()
+else:
+    st.info("スプレッドシートのA列にIDを入力してください。")
