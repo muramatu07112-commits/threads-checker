@@ -12,13 +12,13 @@ st.title("🌐 Threads 生存確認ツール")
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # SecretsからJSON文字列をそのまま読み込みます
-    # これにより、キーの不一致や改行の解釈ミスを完全に防ぎます
-    if "gcp_json" in st.secrets:
-        sa_info = json.loads(st.secrets["gcp_json"])
+    # Secretsから文字列の塊を取得し、JSONとして辞書に変換
+    # これが最も確実な読み込み方法です
+    if "gcp_credentials" in st.secrets:
+        json_str = st.secrets["gcp_credentials"]
+        sa_info = json.loads(json_str)
     else:
-        # 万が一、古い設定が残っていた場合の救済措置
-        st.error("設定エラー: Secretsに 'gcp_json' が見つかりません。")
+        st.error("設定エラー: Secretsに 'gcp_credentials' が見つかりません。")
         st.stop()
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
@@ -34,7 +34,7 @@ except Exception as e:
     st.stop()
 
 # --- 2. 調査実行セクション ---
-# (ここから下は変更ありません)
+# (ここから下は変更ありませんが、念のため記載します)
 all_rows = list_ws.get_all_values()
 if len(all_rows) > 1:
     targets = all_rows[1:]
