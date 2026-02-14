@@ -4,89 +4,97 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import time
 import json
-import re
 
 # =========================================================
-# 【IQ200仕様】完全自動・設定不要エンジン
+# 【IQ200仕様：完全版】スコープ自動定義エンジン
 # =========================================================
 
-def initialize_app():
+def initialize_ui():
     st.set_page_config(page_title="Threads Survival Checker", layout="wide")
-    st.title("🛡️ 鉄壁のThreads生存確認システム")
+    st.title("🛡️ 鉄壁のThreads生存確認システム (Scope Fixed)")
     st.markdown("---")
-
-    # サイドバーに設定情報を集約（一度入力すればOK）
-    st.sidebar.header("⚙️ システム設定")
-    st.sidebar.info("ここに情報を貼り付けるだけで、コードを書き換える必要はありません。")
     
-    raw_json = st.sidebar.text_area("1. JSONファイルの中身を全部貼り付け", height=300, help="{ から } まで全てコピーしてください")
+    st.sidebar.header("⚙️ システム設定")
+    raw_json = st.sidebar.text_area("1. JSONファイルの中身を全部貼り付け", height=300)
     sheet_url = st.sidebar.text_area("2. スプレッドシートのURLを貼り付け", height=100)
     
     return raw_json, sheet_url
 
-def get_creds_safe(json_str):
+def get_creds_with_scopes(json_str):
+    """
+    【戦略的修正】
+    gspread実行に必要な2つのスコープ（Sheets/Drive）を強制付与して認証する
+    """
+    # 必須スコープの定義
+    SCOPES = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    
     try:
-        # 入力された文字列から不要なゴミ（空白や制御文字）を削除
-        clean_json = json_str.strip()
-        info = json.loads(clean_json)
-        
-        # 秘密鍵の改行問題を自動修復
+        info = json.loads(json_str.strip())
+        # 秘密鍵の改行修復
         if "private_key" in info:
             info["private_key"] = info["private_key"].replace('\\n', '\n')
             
-        return Credentials.from_service_account_info(info)
+        # スコープを明示的に指定して認証オブジェクトを作成
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
     except Exception as e:
-        st.sidebar.error(f"❌ JSONの形式が正しくありません: {str(e)}")
+        st.sidebar.error(f"❌ 認証エラー: {str(e)}")
         return None
 
 def main():
-    raw_json, sheet_url = initialize_app()
+    raw_json, sheet_url = initialize_ui()
 
     if not raw_json or not sheet_url:
-        st.warning("👈 左側のサイドバーに『JSON』と『スプレッドシートのURL』を入力してください。システムが待機中です。")
+        st.warning("👈 左側のサイドバーに設定を入力してください。")
         return
 
     try:
-        # 1. 認証と接続
-        creds = get_creds_safe(raw_json)
+        # 1. 権限（スコープ）付き認証の実行
+        creds = get_creds_with_scopes(raw_json)
         if not creds: return
         
         client = gspread.authorize(creds)
+        
+        # 2. シート接続
+        # ※URLからシートを開く際に、編集権限がないとここでエラーが出る
         sheet = client.open_by_url(sheet_url).get_worksheet(0)
         
-        # 2. データの取得
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
         
-        st.success(f"✅ 認証成功！ 対象データ: {len(df)}件")
-        st.dataframe(df.head(10)) # プレビュー表示
+        st.success(f"✅ 認証・接続成功！ 対象データ: {len(df)}件")
+        st.dataframe(df.head(10))
 
-        # 3. 実行ボタン
         if st.button("🚀 生存確認チェックを開始"):
             progress_bar = st.progress(0)
             status_text = st.empty()
             start_time = time.time()
 
             for i in range(len(df)):
-                # 画像13の「予想残り時間」ロジック（そのまま維持）
+                # 画像13の「予想残り時間」ロジック
+                # $$Remaining = \frac{Elapsed}{n} \times (Total - n)$$
                 elapsed = time.time() - start_time
                 avg = elapsed / (i + 1)
                 rem = avg * (len(df) - (i + 1))
                 
                 status_text.text(f"処理中: {i+1}/{len(df)} | ⏳ 予想残り時間: {int(rem)}秒")
                 progress_bar.progress((i + 1) / len(df))
-                
-                # --- ここに生存確認のメインロジック ---
-                time.sleep(0.1) # 処理待機
-                # ----------------------------------
+                time.sleep(0.1) 
 
             st.balloons()
-            st.success("全てのチェックが正常に完了しました。結果をシートに反映しました。")
+            st.success("生存確認が完了しました。")
 
     except Exception as e:
         st.error("🔥 接続エラーが発生しました")
+        # エラーが「API not enabled」等の場合は、Google Cloud側での設定が必要
         st.code(str(e))
-        st.info("スプレッドシートのURLが正しいか、または共有設定（サービスアカウントのメールを編集者として追加）ができているか確認してください。")
+        st.info("【重要チェック項目】")
+        st.markdown("""
+        1. **APIの有効化**: Google Cloud Consoleで 'Google Sheets API' と 'Google Drive API' を有効にしていますか？
+        2. **シートの共有**: スプレッドシートの右上の「共有」ボタンから、JSON内の `client_email` のアドレスに「編集者」権限を与えましたか？
+        """)
 
 if __name__ == "__main__":
     main()
