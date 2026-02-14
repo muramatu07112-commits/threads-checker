@@ -2,38 +2,18 @@ import streamlit as st
 import gspread
 import requests
 import time
-import re
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定 (n混入防止・完全修正版) ---
+# --- 1. Google接続設定（基本に忠実な修正版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    
-    # Secretsから読み込み
     sa_info = dict(st.secrets["gcp_service_account"])
-    raw_key = sa_info["private_key"]
-
-    # 【重要修正】ここで "\n" という文字自体を先に消去します
-    # これをしないと、後の処理で "n" が暗号キーに混ざり込みます
-    raw_key = raw_key.replace("\\n", "")
-
-    # 1. ヘッダー・フッターを削除
-    raw_key = raw_key.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
     
-    # 2. 全ての空白・改行・タブを削除して、純粋なBase64文字列にする
-    raw_key = re.sub(r"\s+", "", raw_key)
-
-    # 3. 64文字ごとに改行を入れて、正しいPEM形式に再構築する
-    formatted_key = "-----BEGIN PRIVATE KEY-----\n"
-    for i in range(0, len(raw_key), 64):
-        formatted_key += raw_key[i:i+64] + "\n"
-    formatted_key += "-----END PRIVATE KEY-----\n"
-    
-    # 整形した鍵をセット
-    sa_info["private_key"] = formatted_key
+    # 唯一必要な処理：文字としての「\n」を、本当の改行コードに変換する
+    sa_info["private_key"] = sa_info["private_key"].replace("\\n", "\n")
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
@@ -80,10 +60,8 @@ if len(all_rows) > 1:
             p_config = None
             if proxy_list:
                 p = proxy_list[i % len(proxy_list)]
-                if not p.startswith("http"):
-                    p_url = f"http://{p}"
-                else:
-                    p_url = p
+                # http://の有無を確認して補正
+                p_url = p if p.startswith("http") else f"http://{p}"
                 p_config = {"http": p_url, "https": p_url}
             
             # 生存確認実行
