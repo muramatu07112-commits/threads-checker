@@ -2,36 +2,37 @@ import streamlit as st
 import gspread
 import requests
 import time
+import re
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（確実な組み立て版） ---
+# --- 1. Google接続設定 ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # Secretsから「鍵の中身」だけを取得
-    if "pk_raw" not in st.secrets:
-        st.error("設定エラー: Secretsに 'pk_raw' が保存されていません。")
+    # ここで新しい名前 'pk_data' を読みに行きます
+    if "pk_data" not in st.secrets:
+        st.error("設定エラー: Secretsに 'pk_data' が保存されていません。")
         st.stop()
-        
-    private_key_content = st.secrets["pk_raw"]
     
-    # 【ここが修正の核心】
-    # エラー InvalidByte(0, 92) は「先頭に \ がある」という意味です。
-    # なので、"-----BEGIN" が出てくるより前のゴミ文字を全て切り捨てます。
-    start_marker = "-----BEGIN PRIVATE KEY-----"
-    if start_marker in private_key_content:
-        start_index = private_key_content.find(start_marker)
-        private_key_content = private_key_content[start_index:]
+    raw_content = st.secrets["pk_data"]
     
-    # 固定情報はここで辞書にまとめます（これで設定漏れエラーも起きません）
+    # 鍵データから英数字と記号(+,/,=)以外を全て削除して整形
+    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_content.replace("PRIVATE KEY", ""))
+    
+    formatted_key = "-----BEGIN PRIVATE KEY-----\n"
+    for i in range(0, len(clean_body), 64):
+        formatted_key += clean_body[i:i+64] + "\n"
+    formatted_key += "-----END PRIVATE KEY-----\n"
+    
+    # 固定情報と合体
     sa_info = {
         "type": "service_account",
         "project_id": "threads-checker",
         "private_key_id": "feedba476b9bcad61b66b93e91aaab7c871f2d52",
-        "private_key": private_key_content,
+        "private_key": formatted_key,
         "client_email": "checker-bot@threads-checker.iam.gserviceaccount.com",
         "client_id": "102355019665572843670",
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
@@ -80,6 +81,7 @@ if len(all_rows) > 1:
         start_time = time.time()
         
         for i, row in enumerate(targets):
+            # 残り時間計算
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
@@ -91,6 +93,7 @@ if len(all_rows) > 1:
             p_config = None
             if proxy_list:
                 p = proxy_list[i % len(proxy_list)]
+                # http://の補正
                 p_url = p if p.startswith("http") else f"http://{p}"
                 p_config = {"http": p_url, "https": p_url}
             
