@@ -9,15 +9,13 @@ import requests
 from datetime import datetime
 
 # =========================================================
-# 1. 認証エンジン（Secrets経由）
+# 1. 認証エンジン
 # =========================================================
 def get_gspread_client():
     try:
         if "gcp_service_account" in st.secrets:
             info = dict(st.secrets["gcp_service_account"])
-            # \n を実際の改行コードに修復（ValueError対策）
             info["private_key"] = info["private_key"].replace('\\n', '\n')
-            
             scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
             creds = Credentials.from_service_account_info(info, scopes=scopes)
             return gspread.authorize(creds)
@@ -27,7 +25,7 @@ def get_gspread_client():
         return None
 
 # =========================================================
-# 2. 生存判定エンジン（厳密判定・プロキシ対応）
+# 2. 判定エンジン
 # =========================================================
 def check_threads_status(username, proxy_str=None):
     url = f"https://www.threads.net/@{username}"
@@ -40,57 +38,45 @@ def check_threads_status(username, proxy_str=None):
             proxies = {"http": p, "https": p}
     try:
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
-        if resp.status_code in [403, 407]: return "プロキシブロック", False
         content = resp.text.lower()
         if resp.status_code == 200 and username.lower() in content:
             if "page not found" in content or "unavailable" in content: return "凍結/削除", True
             return "生存", True
-        elif resp.status_code == 404 or "page not found" in content: return "凍結/削除", True
-        else: return f"エラー({resp.status_code})", False
-    except: return "通信失敗", False
+        return "凍結/削除", True
+    except:
+        return "通信失敗", False
 
 # =========================================================
-# 3. メインコントロールパネル
+# 3. メインコントロール
 # =========================================================
 def main():
-    st.set_page_config(page_title="Threads Pro Checker", layout="wide")
-    st.title("🛡️ Threads生存確認システム (完全統合版)")
+    st.set_page_config(page_title="Threads Checker", layout="wide")
+    st.title("🛡️ Threads生存確認システム (構造修復済み)")
 
-    # 停止フラグの管理
-    if "is_running" not in st.session_state: st.session_state.is_running = False
     if "stop_requested" not in st.session_state: st.session_state.stop_requested = False
 
-    # 認証
     client = get_gspread_client()
-    if not client:
-        st.warning("👈 StreamlitのSecretsを設定してください。")
-        st.stop()
+    if not client: st.stop()
 
     sheet_url = st.secrets.get("sheet_url", "")
-    if not sheet_url:
-        st.error("Secretsに 'sheet_url' が設定されていません。")
-        st.stop()
-
     try:
         sheet = client.open_by_url(sheet_url).get_worksheet(0)
         df = pd.DataFrame(sheet.get_all_records())
-        st.success(f"✅ 接続成功！ 対象データ: {len(df)}件")
-        st.dataframe(df.head(10))
+        st.success(f"✅ 接続成功: {len(df)}件")
 
-        # 操作ボタン
         col1, col2 = st.columns(2)
-        start_btn = col1.button("🚀 調査開始", use_container_width=True, disabled=st.session_state.is_running)
+        start_btn = col1.button("🚀 調査開始", use_container_width=True)
         stop_btn = col2.button("⏹️ 中断", use_container_width=True)
 
-        if stop_btn:
-            st.session_state.stop_requested = True
-            st.info("⏹️ 中断リクエストを送信しました。次の処理で停止します。")
+        if stop_btn: st.session_state.stop_requested = True
 
         if start_btn:
-            st.session_state.is_running = True
             st.session_state.stop_requested = False
-            
-            # 列の準備（判定結果、確認日時）
+            progress_bar = st.progress(0)
+            status_area = st.empty()
+            start_time = time.time() # 初期時刻取得
+
+            # 列インデックスの準備
             headers = sheet.row_values(1)
             for h in ["判定結果", "確認日時"]:
                 if h not in headers:
@@ -99,26 +85,37 @@ def main():
             res_idx = headers.index("判定結果") + 1
             time_idx = headers.index("確認日時") + 1
 
-            progress_bar = st.progress(0)
-            status_area = st.empty()
-            start_time = time.time()
-
             for i, row in df.iterrows():
-                # 中断チェック
                 if st.session_state.stop_requested:
-                    st.error("調査を中断しました。")
+                    st.warning("⏹️ 中断リクエストにより停止しました。")
                     break
 
                 username = str(row.get("ID", "")).replace("@", "").strip()
                 proxy = str(row.get("プロキシ", ""))
                 
-                # 生存判定実行
-                status, is_valid_proxy = check_threads_status(username, proxy)
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-                # シートに即時書き込み
+                # 判定と書き込み
+                status, _ = check_threads_status(username, proxy)
                 sheet.update_cell(i + 2, res_idx, status)
-                sheet.update_cell(i + 2, time_idx, now_str)
+                sheet.update_cell(i + 2, time_idx, datetime.now().strftime("%Y-%m-%d %H:%M"))
 
-                # 【画像13のロジック】残り時間の算出
-                elapsed = time.time
+                # 【重要修正】画像13：残り時間の算出ロジック
+                # $T_{elapsed} = T_{now} - T_{start}$
+                elapsed = time.time() - start_time
+                avg = elapsed / (i + 1)
+                rem = avg * (len(df) - (i + 1))
+
+                status_area.markdown(f"**進行中**: `{username}` -> **{status}** | ⏳ **残り約**: `{int(rem)}`秒")
+                progress_bar.progress((i + 1) / len(df))
+
+                # 人間らしいゆらぎ待機
+                time.sleep(random.uniform(5, 10))
+
+            if not st.session_state.stop_requested:
+                st.balloons()
+                st.success("完了しました。")
+
+    except Exception as e:
+        st.error(f"🔥 システムエラー: {str(e)}")
+
+if __name__ == "__main__":
+    main()
