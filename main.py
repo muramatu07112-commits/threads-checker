@@ -5,10 +5,11 @@ import pandas as pd
 import time
 import json
 import requests
+import random  # ランダムな待機時間のために追加
 from datetime import datetime
 
 # =========================================================
-# 1. 判定ロジックの高度化（シグネチャ分析）
+# 1. 判定ロジックの高度化（シグネチャ分析 + ランダム待機）
 # =========================================================
 def check_threads_strict(username, proxy_str=None):
     url = f"https://www.threads.net/@{username}"
@@ -27,13 +28,11 @@ def check_threads_strict(username, proxy_str=None):
     try:
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
         
-        # 1. プロキシ自体のブロック判定
+        # プロキシ自体のブロック判定
         if resp.status_code in [403, 407]:
             return "プロキシブロック", False
             
-        # 2. コンテンツによる厳密判定
-        # 生存していれば、ソース内に必ずユーザー名が含まれる。
-        # 凍結/削除時は "Page not found" や "unavailable" が含まれる。
+        # コンテンツによる厳密判定
         content = resp.text.lower()
         if resp.status_code == 200 and username.lower() in content:
             if "page not found" in content or "unavailable" in content:
@@ -57,9 +56,8 @@ def main():
     if "stop_requested" not in st.session_state:
         st.session_state.stop_requested = False
 
-    st.title("🛡️ 鉄壁のThreads生存確認 (プロキシ・厳密判定版)")
+    st.title("🛡️ Threads生存確認 (プロキシ・ゆらぎ待機版)")
     
-    # 設定エリア
     with st.sidebar:
         raw_json = st.text_area("1. Service Account JSON")
         sheet_url = st.text_area("2. Spreadsheet URL")
@@ -77,17 +75,19 @@ def main():
         # 認証
         info = json.loads(raw_json)
         info["private_key"] = info["private_key"].replace('\\n', '\n')
-        creds = Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
+        creds = Credentials.from_service_account_info(
+            info, 
+            scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        )
         client = gspread.authorize(creds)
         sheet = client.open_by_url(sheet_url).get_worksheet(0)
         
         df = pd.DataFrame(sheet.get_all_records())
         st.write(f"📊 読込データ: {len(df)}件")
 
-        # 実行コントロール
         col1, col2 = st.columns(2)
         start_btn = col1.button("🚀 調査開始", use_container_width=True)
-        stop_btn = col2.button("⏹️ 中断（次の処理で停止）", use_container_width=True)
+        stop_btn = col2.button("⏹️ 中断", use_container_width=True)
 
         if stop_btn:
             st.session_state.stop_requested = True
@@ -98,7 +98,6 @@ def main():
             status_text = st.empty()
             start_time = time.time()
             
-            # 列の準備
             headers = sheet.row_values(1)
             for h in ["判定結果", "確認日時"]:
                 if h not in headers:
@@ -110,7 +109,7 @@ def main():
 
             for i, row in df.iterrows():
                 if st.session_state.stop_requested:
-                    st.error("⏹️ 中断リクエストを受け付けました。停止します。")
+                    st.error("⏹️ 中断されました。")
                     break
 
                 user = str(row.get(user_col, "")).replace("@", "").strip()
@@ -123,11 +122,10 @@ def main():
                 sheet.update_cell(i + 2, res_idx, status)
                 sheet.update_cell(i + 2, time_idx, datetime.now().strftime("%Y-%m-%d %H:%M"))
 
-                # プロキシブロックの即時報告
                 if not is_valid_proxy and "プロキシ" in status:
-                    st.sidebar.warning(f"⚠️ プロキシ停止報告: 行 {i+2} のプロキシがブロックされました")
+                    st.sidebar.warning(f"⚠️ プロキシブロック報告: 行 {i+2}")
 
-                # 時間計算（画像13ロジック）
+                # 時間計算
                 elapsed = time.time() - start_time
                 avg = elapsed / (i + 1)
                 rem = avg * (len(df) - (i + 1))
@@ -135,7 +133,9 @@ def main():
                 status_text.markdown(f"**進行中**: `{user}` | 結果: **{status}** | 残り約 `{int(rem)}`秒")
                 progress_bar.progress((i + 1) / len(df))
                 
-                time.sleep(2) # BAN回避のためのインターバル
+                # --- 【重要】5秒～10秒のゆらぎ設定 ---
+                wait_time = random.uniform(5, 10)
+                time.sleep(wait_time) 
 
             if not st.session_state.stop_requested:
                 st.balloons()
