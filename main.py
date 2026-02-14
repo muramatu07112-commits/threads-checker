@@ -2,17 +2,17 @@ import streamlit as st
 import gspread
 import requests
 import time
-import json
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査サイト", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定 ---
+# --- 1. Google接続設定 (最も壊れにくい直接読み込み形式) ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    # 複雑な設定を一つの箱（json_data）から取り出します
-    sa_info = json.loads(st.secrets["gcp_service_account"]["json_data"])
+    
+    # 秘密（Secrets）の情報をそのままGoogleに渡します
+    sa_info = st.secrets["gcp_service_account"]
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
     
