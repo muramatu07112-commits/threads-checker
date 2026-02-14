@@ -4,12 +4,11 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import time
 import random
-import json
 import requests
 from datetime import datetime
 
 # =========================================================
-# 1. 認証エンジン（Secretsから安全に取得）
+# 1. 認証エンジン（Secretsから取得）
 # =========================================================
 def get_gspread_client():
     try:
@@ -25,34 +24,53 @@ def get_gspread_client():
         return None
 
 # =========================================================
-# 2. 【IDダイレクトチェック】単純な判定
+# 2. 【IDダイレクトチェック】ブラウザ偽装（ランダム）機能付き
 # =========================================================
 def check_threads_simple(username, proxy_str=None):
     url = f"https://www.threads.net/@{username}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    
+    # 【無料の防御策】最新のブラウザ・デバイス名簿からランダムに名乗る
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0"
+    ]
+    headers = {
+        "User-Agent": random.choice(user_agents),
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8"
+    }
+    
     proxies = None
     if proxy_str:
         parts = proxy_str.split(':')
         if len(parts) == 4:
             p = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
             proxies = {"http": p, "https": p}
+
     try:
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
         content = resp.text.lower()
+        
+        # IDが含まれているか（単純な生存確認）
         if f"@{username.lower()}" in content:
             return "生存", True
+        
+        # Metaの遮断壁
         if "login" in content and resp.status_code == 200:
             return "判定不能（Meta遮断中）", False
+            
         return "存在しない（凍結/削除）", True
     except:
         return "通信失敗", False
 
 # =========================================================
-# 3. メインコントロール（全機能統合版）
+# 3. メインコントロールパネル
 # =========================================================
 def main():
-    st.set_page_config(page_title="Threads Checker", layout="wide")
-    st.title("🛡️ Threads生存確認：完全統合版")
+    st.set_page_config(page_title="Threads Survival Checker", layout="wide")
+    st.title("🛡️ Threads生存確認：ブラウザランダム偽装版")
 
     if "stop_requested" not in st.session_state:
         st.session_state.stop_requested = False
@@ -103,15 +121,15 @@ def main():
                 sheet.update_cell(i + 2, res_idx, status)
                 sheet.update_cell(i + 2, time_idx, now_str)
 
-                # --- 予測計算と表示（131行目の修正ポイント） ---
+                # 予測計算
                 elapsed = time.time() - start_time
                 avg = elapsed / (i + 1)
                 rem = avg * (len(df) - (i + 1))
 
-                # 文末の " と ) を確実に閉じました
                 status_area.markdown(f"**進行中**: `{username}` -> **{status}** ({i+1}/{len(df)})  \n⏳ **およその残り時間**: `{int(rem)}`秒")
                 progress_bar.progress((i + 1) / len(df))
 
+                # ゆらぎ待機（5秒～10秒）
                 time.sleep(random.uniform(5, 10))
 
             if not st.session_state.stop_requested:
