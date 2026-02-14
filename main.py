@@ -2,31 +2,51 @@ import streamlit as st
 import gspread
 import requests
 import time
-import json
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（文字列一括読み込み版） ---
+# --- 1. Google接続設定（確実な組み立て版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # Secretsから "threads_key" という名前の「ただの文字列」を読み込む
-    if "threads_key" in st.secrets:
-        key_string = st.secrets["threads_key"]
-        # その文字列をJSON（プログラムが読める辞書）に変換する
-        sa_info = json.loads(key_string)
-    else:
-        st.error("設定エラー: Secretsに 'threads_key' が保存されていません。")
+    # Secretsから「鍵の中身」だけを取得
+    if "pk_raw" not in st.secrets:
+        st.error("設定エラー: Secretsに 'pk_raw' が保存されていません。")
         st.stop()
+        
+    private_key_content = st.secrets["pk_raw"]
+    
+    # 【ここが修正の核心】
+    # エラー InvalidByte(0, 92) は「先頭に \ がある」という意味です。
+    # なので、"-----BEGIN" が出てくるより前のゴミ文字を全て切り捨てます。
+    start_marker = "-----BEGIN PRIVATE KEY-----"
+    if start_marker in private_key_content:
+        start_index = private_key_content.find(start_marker)
+        private_key_content = private_key_content[start_index:]
+    
+    # 固定情報はここで辞書にまとめます（これで設定漏れエラーも起きません）
+    sa_info = {
+        "type": "service_account",
+        "project_id": "threads-checker",
+        "private_key_id": "feedba476b9bcad61b66b93e91aaab7c871f2d52",
+        "private_key": private_key_content,
+        "client_email": "checker-bot@threads-checker.iam.gserviceaccount.com",
+        "client_id": "102355019665572843670",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/checker-bot%40threads-checker.iam.gserviceaccount.com",
+        "universe_domain": "googleapis.com"
+    }
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
     sheet = gc.open("Threads調査ツール")
     list_ws = sheet.worksheet("調査リスト")
     
-    # プロキシシートの読み込み（念のためエラー回避付き）
+    # プロキシシートの読み込み
     try:
         proxy_ws = sheet.worksheet("プロキシ")
     except:
@@ -60,7 +80,6 @@ if len(all_rows) > 1:
         start_time = time.time()
         
         for i, row in enumerate(targets):
-            # 残り時間計算
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
