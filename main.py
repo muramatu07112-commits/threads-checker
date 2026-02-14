@@ -8,13 +8,13 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（Secrets不使用・徹底洗浄版） ---
+# --- 1. Google接続設定（不純物完全排除ロジック） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
-    # 【重要】Secretsを通さず、ここに直接データを置きます。
-    # ここにどれだけスペースや改行が混ざっていても、下のプログラムが完全に洗浄します。
-    raw_pk_data = """
+    # 【核心】鍵の純粋なデータのみを定義。
+    # ここにどんなスペースや改行が混ざっていても、下の正規表現で「英数字」以外をすべて抹殺します。
+    raw_input = """
     MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCVa+ODKkA7W/Js
     71Bk8mi/fhR6LB6n7punbUFj5yB3pdGrmdw96zE+EnfjB/adIXl2Ns77zN7brGTv
     Xp6Q5T6W7KIRoidR/laIarm6hrXloAiqFmkP3O0gseD9wDMMUHEFD8tcgUZPSQ9P
@@ -43,16 +43,17 @@ try:
     +b3LbwGqIT+3NtCRQQ==
     """
 
-    # 【徹底洗浄ロジック】英数字、プラス、スラッシュ、イコール以外をすべて削除
-    # これにより、コピペで混入したスペース、改行、バックスラッシュを物理的に抹殺します
-    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_pk_data)
+    # 1. 徹底洗浄：英数字、プラス、スラッシュ、イコール以外を全て消去
+    # これによりコピペ時のスペースや改行、バックスラッシュを物理的に抹殺します。
+    clean_key = "".join(re.findall(r"[a-zA-Z0-9+/=]", raw_input))
     
-    # PEM形式（64文字ごとの改行）に強制的に組み立て直します
+    # 2. 正確なPEM整形：64文字ごとに改行を入れ、ヘッダーを付与
     formatted_key = "-----BEGIN PRIVATE KEY-----\n"
-    for i in range(0, len(clean_body), 64):
-        formatted_key += clean_body[i:i+64] + "\n"
+    for i in range(0, len(clean_key), 64):
+        formatted_key += clean_key[i:i+64] + "\n"
     formatted_key += "-----END PRIVATE KEY-----\n"
 
+    # 3. 認証情報の組み立て
     sa_info = {
         "type": "service_account",
         "project_id": "threads-checker",
@@ -71,6 +72,7 @@ try:
     sheet = gc.open("Threads調査ツール")
     list_ws = sheet.worksheet("調査リスト")
     
+    # プロキシ設定の読み込み
     try:
         proxy_ws = sheet.worksheet("プロキシ")
     except:
@@ -82,7 +84,8 @@ except Exception as e:
     st.error(f"❌ 接続エラー: {e}")
     st.stop()
 
-# --- 2. 調査実行セクション（画像13のロジックを含む） ---
+# --- 2. 調査実行セクション（13.pngのロジックを反映） ---
+#
 all_rows = list_ws.get_all_values()
 if len(all_rows) > 1:
     targets = all_rows[1:]
@@ -97,7 +100,7 @@ if len(all_rows) > 1:
         start_time = time.time()
         
         for i, row in enumerate(targets):
-            # 残り時間計算ロジック
+            # の時間計算
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
@@ -113,7 +116,6 @@ if len(all_rows) > 1:
                 p_config = {"http": p_url, "https": p_url}
             
             try:
-                # 判定処理
                 res = requests.get(f"https://www.threads.net/@{target_id}", proxies=p_config, timeout=10)
                 result = "生存" if res.status_code == 200 else "凍結/削除"
             except:
@@ -127,4 +129,4 @@ if len(all_rows) > 1:
         st.success("✅ 調査完了！")
         st.balloons()
 else:
-    st.info("スプレッドシートのA列にIDを入力してください。")
+    st.info("スプレッドシートに調査対象IDを入力してください。")
