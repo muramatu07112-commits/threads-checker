@@ -2,46 +2,84 @@ import streamlit as st
 import gspread
 import requests
 import time
-import json
+import re
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（JSON一括読み込み版） ---
+# --- 1. Google接続設定（最終・自動洗浄版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # Secretsから文字列の塊を取得し、JSONとして辞書に変換
-    # これが最も確実な読み込み方法です
-    if "gcp_credentials" in st.secrets:
-        json_str = st.secrets["gcp_credentials"]
-        sa_info = json.loads(json_str)
+    # Secretsから辞書としてデータを取得
+    # （見出しがあってもなくても、JSONでも、柔軟に対応して読み込みます）
+    if "gcp_service_account" in st.secrets:
+        sa_info = dict(st.secrets["gcp_service_account"])
+    elif "gcp_json" in st.secrets:
+        import json
+        sa_info = json.loads(st.secrets["gcp_json"])
     else:
-        st.error("設定エラー: Secretsに 'gcp_credentials' が見つかりません。")
-        st.stop()
+        # フラット形式（直書き）の場合
+        sa_info = dict(st.secrets)
+
+    # ---------------------------------------------------------
+    # 【ここがエラー撲滅の核心】 鍵データの完全洗浄ロジック
+    # ---------------------------------------------------------
+    raw_key = sa_info.get("private_key", "")
+    
+    # 1. "\n" という「文字」があれば消す（これが諸悪の根源でした）
+    raw_key = raw_key.replace("\\n", "")
+    
+    # 2. ヘッダーとフッターを一旦削除して、中身だけにする
+    raw_key = raw_key.replace("-----BEGIN PRIVATE KEY-----", "")
+    raw_key = raw_key.replace("-----END PRIVATE KEY-----", "")
+    
+    # 3. スペース、改行、バックスラッシュなど、不要な記号をすべて消滅させる
+    #    残るのは純粋な「英数字と記号(+,/,=)」だけになります
+    import re
+    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_key)
+    
+    # 4. 正しい形式（64文字ごとの改行）でヘッダー・フッターを付け直す
+    formatted_key = "-----BEGIN PRIVATE KEY-----\n"
+    for i in range(0, len(clean_body), 64):
+        formatted_key += clean_body[i:i+64] + "\n"
+    formatted_key += "-----END PRIVATE KEY-----\n"
+    
+    # 洗浄した鍵をセット
+    sa_info["private_key"] = formatted_key
+    # ---------------------------------------------------------
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
     sheet = gc.open("Threads調査ツール")
     list_ws = sheet.worksheet("調査リスト")
-    proxy_ws = sheet.worksheet("プロキシ")
+    
+    # プロキシシートの読み込み（シートが無い場合のエラー回避）
+    try:
+        proxy_ws = sheet.worksheet("プロキシ")
+    except:
+        proxy_ws = None
+
     st.success("✅ Googleスプレッドシートへの接続に成功しました！")
 
 except Exception as e:
     st.error("❌ 接続エラーが発生しました。")
     st.warning(f"理由: {str(e)}")
+    st.info("※このエラーが続く場合、スプレッドシートのファイル名が合っているか、共有設定ができているか確認してください。")
     st.stop()
 
 # --- 2. 調査実行セクション ---
-# (ここから下は変更ありませんが、念のため記載します)
 all_rows = list_ws.get_all_values()
 if len(all_rows) > 1:
     targets = all_rows[1:]
-    try:
-        proxy_list = [r[0] for r in proxy_ws.get_all_values()[1:] if r]
-    except:
-        proxy_list = []
+    # プロキシリストの取得
+    proxy_list = []
+    if proxy_ws:
+        try:
+            proxy_list = [r[0] for r in proxy_ws.get_all_values()[1:] if r]
+        except:
+            pass
 
     st.sidebar.write(f"📊 調査対象: {len(targets)} 件")
     
@@ -52,6 +90,7 @@ if len(all_rows) > 1:
         start_time = time.time()
         
         for i, row in enumerate(targets):
+            # 残り時間計算
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
