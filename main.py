@@ -15,7 +15,6 @@ def get_gspread_client():
     try:
         if "gcp_service_account" in st.secrets:
             info = dict(st.secrets["gcp_service_account"])
-            # 秘密鍵の改行コードを正しく復元
             info["private_key"] = info["private_key"].replace('\\n', '\n')
             scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
             creds = Credentials.from_service_account_info(info, scopes=scopes)
@@ -26,33 +25,24 @@ def get_gspread_client():
         return None
 
 # =========================================================
-# 2. 【IDダイレクトチェック】あなたの「単純なやり方」を具現化
+# 2. 【IDダイレクトチェック】単純な判定
 # =========================================================
 def check_threads_simple(username, proxy_str=None):
-    # シンプルにそのアカウントのURLを生成
     url = f"https://www.threads.net/@{username}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    
     proxies = None
     if proxy_str:
         parts = proxy_str.split(':')
         if len(parts) == 4:
             p = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
             proxies = {"http": p, "https": p}
-
     try:
-        # ブラウザで開くのと同じようにアクセス
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
         content = resp.text.lower()
-        
-        # あなたが仰る通り、ページ内にそのIDがあるかないかだけで判断
         if f"@{username.lower()}" in content:
             return "生存", True
-        
-        # Metaの遮断壁（ログイン要求）が出た場合
         if "login" in content and resp.status_code == 200:
             return "判定不能（Meta遮断中）", False
-            
         return "存在しない（凍結/削除）", True
     except:
         return "通信失敗", False
@@ -61,26 +51,22 @@ def check_threads_simple(username, proxy_str=None):
 # 3. メインコントロール（全機能統合版）
 # =========================================================
 def main():
-    st.set_page_config(page_title="Threads Pro Checker", layout="wide")
+    st.set_page_config(page_title="Threads Checker", layout="wide")
     st.title("🛡️ Threads生存確認：完全統合版")
 
-    # 状態管理（停止フラグ）
     if "stop_requested" not in st.session_state:
         st.session_state.stop_requested = False
 
-    # 1. 認証
     client = get_gspread_client()
     if not client:
         st.stop()
 
-    # 2. シート接続
     sheet_url = st.secrets.get("sheet_url", "")
     try:
         sheet = client.open_by_url(sheet_url).get_worksheet(0)
         df = pd.DataFrame(sheet.get_all_records())
         st.success(f"✅ 接続成功！ 対象データ: {len(df)}件")
 
-        # 3. 操作パネル（中断ボタン含む）
         col1, col2 = st.columns(2)
         start_btn = col1.button("🚀 調査開始", use_container_width=True)
         stop_btn = col2.button("⏹️ 中断", use_container_width=True)
@@ -95,7 +81,6 @@ def main():
             status_area = st.empty()
             start_time = time.time()
             
-            # シートの列インデックスを確認
             headers = sheet.row_values(1)
             for h in ["判定結果", "確認日時"]:
                 if h not in headers:
@@ -104,28 +89,37 @@ def main():
             res_idx = headers.index("判定結果") + 1
             time_idx = headers.index("確認日時") + 1
 
-            # --- メインループ ---
             for i, row in df.iterrows():
-                # 中断チェック
                 if st.session_state.stop_requested:
                     st.error("中断しました。")
                     break
 
-                # IDとプロキシの取得
                 username = str(row.get("ID", "")).replace("@", "").strip()
                 proxy = str(row.get("プロキシ", ""))
                 
-                # 判定実行
                 status, _ = check_threads_simple(username, proxy)
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-                # 【機能：シート反映】
                 sheet.update_cell(i + 2, res_idx, status)
                 sheet.update_cell(i + 2, time_idx, now_str)
 
-                # 【機能：およその残り時間】
+                # --- 予測計算と表示（131行目の修正ポイント） ---
                 elapsed = time.time() - start_time
                 avg = elapsed / (i + 1)
                 rem = avg * (len(df) - (i + 1))
 
-                status_area.markdown(f"**進行中**: `{username}` -> **{status}** ({i+1}/{len(df)})  \n⏳ **およその残り時間**: `{int(rem)}
+                # 文末の " と ) を確実に閉じました
+                status_area.markdown(f"**進行中**: `{username}` -> **{status}** ({i+1}/{len(df)})  \n⏳ **およその残り時間**: `{int(rem)}`秒")
+                progress_bar.progress((i + 1) / len(df))
+
+                time.sleep(random.uniform(5, 10))
+
+            if not st.session_state.stop_requested:
+                st.balloons()
+                st.success("全てのチェックが完了しました！")
+
+    except Exception as e:
+        st.error(f"🔥 システムエラー: {str(e)}")
+
+if __name__ == "__main__":
+    main()
