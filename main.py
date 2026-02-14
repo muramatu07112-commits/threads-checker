@@ -2,24 +2,24 @@ import streamlit as st
 import gspread
 import requests
 import time
+import json
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（設定画面に合わせた修正版） ---
+# --- 1. Google接続設定（JSON一括読み込み版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # 【ここが修正ポイント】
-    # 設定画面を「見出しなし」にしたので、プログラムも「見出しなし」で読み込みます。
-    # st.secrets をそのまま辞書として使い、鍵の \n だけ修復します。
-    
-    sa_info = dict(st.secrets)
-    
-    # 秘密鍵の "\n" という文字を、本物の改行コードに変換
-    if "private_key" in sa_info:
-        sa_info["private_key"] = sa_info["private_key"].replace("\\n", "\n")
+    # SecretsからJSON文字列をそのまま読み込みます
+    # これにより、キーの不一致や改行の解釈ミスを完全に防ぎます
+    if "gcp_json" in st.secrets:
+        sa_info = json.loads(st.secrets["gcp_json"])
+    else:
+        # 万が一、古い設定が残っていた場合の救済措置
+        st.error("設定エラー: Secretsに 'gcp_json' が見つかりません。")
+        st.stop()
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
@@ -30,13 +30,11 @@ try:
 
 except Exception as e:
     st.error("❌ 接続エラーが発生しました。")
-    # エラーの詳細を表示（デバッグ用）
-    st.warning(f"エラー詳細: {str(e)}")
-    st.info("※設定画面(Secrets)のキー名が間違っていないか確認してください (type, project_id, private_keyなど)")
+    st.warning(f"理由: {str(e)}")
     st.stop()
 
 # --- 2. 調査実行セクション ---
-# (以下は正常に動くロジックです)
+# (ここから下は変更ありません)
 all_rows = list_ws.get_all_values()
 if len(all_rows) > 1:
     targets = all_rows[1:]
@@ -54,7 +52,6 @@ if len(all_rows) > 1:
         start_time = time.time()
         
         for i, row in enumerate(targets):
-            # 残り時間計算
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
