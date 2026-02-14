@@ -2,32 +2,30 @@ import streamlit as st
 import gspread
 import requests
 import time
-import re
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定 ---
+# --- 1. Google接続設定（鍵の自動復元版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # ここで新しい名前 'pk_data' を読みに行きます
-    if "pk_data" not in st.secrets:
-        st.error("設定エラー: Secretsに 'pk_data' が保存されていません。")
+    # 1. Secretsから「暗号文字列」だけを取得
+    if "pk_base64" not in st.secrets:
+        st.error("設定エラー: Secretsに 'pk_base64' が見つかりません。")
         st.stop()
+        
+    base64_key = st.secrets["pk_base64"]
     
-    raw_content = st.secrets["pk_data"]
-    
-    # 鍵データから英数字と記号(+,/,=)以外を全て削除して整形
-    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_content.replace("PRIVATE KEY", ""))
-    
+    # 2. ここでプログラムが「正しい鍵の形」に組み立て直します
+    # (ヘッダーをつけ、64文字ごとに改行を入れる)
     formatted_key = "-----BEGIN PRIVATE KEY-----\n"
-    for i in range(0, len(clean_body), 64):
-        formatted_key += clean_body[i:i+64] + "\n"
+    for i in range(0, len(base64_key), 64):
+        formatted_key += base64_key[i:i+64] + "\n"
     formatted_key += "-----END PRIVATE KEY-----\n"
     
-    # 固定情報と合体
+    # 3. 固定情報と合体させて完成
     sa_info = {
         "type": "service_account",
         "project_id": "threads-checker",
@@ -64,7 +62,6 @@ except Exception as e:
 all_rows = list_ws.get_all_values()
 if len(all_rows) > 1:
     targets = all_rows[1:]
-    # プロキシリストの取得
     proxy_list = []
     if proxy_ws:
         try:
@@ -81,7 +78,6 @@ if len(all_rows) > 1:
         start_time = time.time()
         
         for i, row in enumerate(targets):
-            # 残り時間計算
             elapsed = time.time() - start_time
             avg = elapsed / (i + 1) if i > 0 else 1.2
             rem = int((len(targets) - (i + 1)) * avg)
@@ -93,7 +89,6 @@ if len(all_rows) > 1:
             p_config = None
             if proxy_list:
                 p = proxy_list[i % len(proxy_list)]
-                # http://の補正
                 p_url = p if p.startswith("http") else f"http://{p}"
                 p_config = {"http": p_url, "https": p_url}
             
