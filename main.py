@@ -1,33 +1,26 @@
 import streamlit as st
-import re
-import base64
-from google.oauth2.service_account import Credentials
+import sys
+
+# =========================================================
+# 0. 最優先：グローバル・エラー・キャッチャー
+# =========================================================
+# UIが描画される前に死ぬのを防ぐため、最上段に配置
+try:
+    import gspread
+    import pandas as pd
+    import re
+    import time
+    from google.oauth2.service_account import Credentials
+except Exception as e:
+    st.error(f"❌ ライブラリのインポート段階で失敗: {str(e)}")
+    st.stop()
 
 def get_ultra_sanitized_credentials(raw_pk, client_email, project_id):
-    """
-    ASN.1の整合性を保つための超精密洗浄
-    """
-    # 1. 物理的な欠損チェック
-    if "-----BEGIN PRIVATE KEY-----" not in raw_pk:
-        # ヘッダーがない場合は、単なるBase64文字列として処理
-        clean_pk = re.sub(r'[^a-zA-Z0-9+/]', '', raw_pk)
-    else:
-        # ヘッダー/フッターがある場合は、その間だけを抽出
-        matches = re.findall(r'-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----', raw_pk, re.DOTALL)
-        if matches:
-            clean_pk = re.sub(r'[^a-zA-Z0-9+/]', '', matches[0])
-        else:
-            clean_pk = re.sub(r'[^a-zA-Z0-9+/]', '', raw_pk)
-
-    # 2. パディングの数学的補正
+    # 前回の洗浄ロジック（ここでのエラーも捕捉対象）
+    clean_pk = re.sub(r'[^a-zA-Z0-9+/]', '', raw_pk)
     while len(clean_pk) % 4 != 0:
         clean_pk += '='
-
-    # 3. 診断（重要）：現在の文字数を出力
-    # 標準的なGoogle秘密鍵(RSA 2048)は約1600〜1700文字程度です
-    st.write(f"🔧 診断情報: 洗浄後のBase64文字数 = {len(clean_pk)}")
     
-    # 4. PEM再構築
     formatted_pk = "-----BEGIN PRIVATE KEY-----\n"
     for i in range(0, len(clean_pk), 64):
         formatted_pk += clean_pk[i:i+64] + "\n"
@@ -36,12 +29,55 @@ def get_ultra_sanitized_credentials(raw_pk, client_email, project_id):
     info = {
         "type": "service_account",
         "project_id": project_id,
-        "private_key": formatted_pk.replace('\\n', '\n'), # エスケープの強制置換
+        "private_key": formatted_pk.replace('\\n', '\n'),
         "client_email": client_email,
         "token_uri": "https://oauth2.googleapis.com/token",
     }
     return Credentials.from_service_account_info(info)
 
-# --- 実行部分 ---
-# RAW_PRIVATE_KEY には、JSONファイル内の "private_key" の値（-----BEGIN...から...END-----\nまで）
-# を、前後のダブルクォーテーションを除いてそのまま貼り付けてください。
+# =========================================================
+# 1. ブートストラップ・モニタリング
+# =========================================================
+def main():
+    # 画面が真っ白になるのを防ぐため、即座にタイトルを描画
+    st.title("🛡️ Debug Mode: Threads Survival Checker")
+    st.write("システム起動中... (この画面が見えていれば基本構造は正常です)")
+
+    # 設定データ（ここにあなたの情報を入力）
+    # ※前回の「ASN.1 parsing error」を防ぐため、JSONの private_key 全体をコピペしてください
+    RAW_PRIVATE_KEY = "ここに秘密鍵を貼り付け" 
+    CLIENT_EMAIL = "your-email"
+    PROJECT_ID = "your-id"
+    SHEET_URL = "your-url"
+
+    # --- 認証プロセス（ここが白画面の主犯候補） ---
+    try:
+        st.write("⏳ Step 1: 鍵の洗浄と認証を開始...")
+        creds = get_ultra_sanitized_credentials(RAW_PRIVATE_KEY, CLIENT_EMAIL, PROJECT_ID)
+        
+        st.write("⏳ Step 2: Google Sheets 接続開始...")
+        client = gspread.authorize(creds)
+        
+        st.write("⏳ Step 3: スプレッドシート取得...")
+        sheet = client.open_by_url(SHEET_URL).get_worksheet(0)
+        
+        data = sheet.get_all_records()
+        st.success("✅ 全プロセス正常完了。スプレッドシートの読み込みに成功しました。")
+        st.write(f"取得データ件数: {len(data)}件")
+        
+        # プレビュー表示
+        if data:
+            st.dataframe(pd.DataFrame(data).head())
+
+    except Exception as e:
+        # すべてのエラーを画面に強制出力
+        st.error(f"⚠️ 実行エラー発生: {type(e).__name__}")
+        st.code(str(e))
+        st.info("これが表示される場合、認証情報またはネットワークに問題があります。")
+
+# 実行
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as fatal_e:
+        st.error(f"🔥 致命的なメインループエラー: {str(fatal_e)}")
