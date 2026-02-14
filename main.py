@@ -1,64 +1,62 @@
 import streamlit as st
 import gspread
-from google.oauth2.service_account import Credentials
 import requests
 import time
+import re
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定 (最もエラーが起きない直接指定方式) ---
+# --- 1. Google接続設定 (外科手術式・自動修復) ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    sa_info = dict(st.secrets["gcp_service_account"])
     
-    # Secretsから直接辞書として読み込みます（修復コードは不要になりました）
-    sa_info = st.secrets["gcp_service_account"]
+    # 【ここが重要】鍵を一度完全にバラバラにし、英数字だけを抽出して1から作り直します
+    raw_key = sa_info["private_key"]
+    # 1. 鍵のヘッダー/フッター以外の「中身の英数字」だけを抜き取る
+    core_content = "".join(re.findall(r'[a-zA-Z0-9+/=]', raw_key.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")))
+    # 2. Googleが100%受理する形式に再構成する
+    sa_info["private_key"] = f"-----BEGIN PRIVATE KEY-----\n{core_content}\n-----END PRIVATE KEY-----\n"
+
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
-    
     sheet = gc.open("Threads調査ツール")
     list_ws = sheet.worksheet("調査リスト")
-    st.success("✅ Googleスプレッドシートへの接続に成功しました！")
+    st.success("✅ ついに成功しました！Googleに接続完了です。")
 except Exception as e:
-    st.error("❌ 接続エラーが発生しました。")
-    st.warning(f"理由: {str(e)}")
+    st.error("❌ 接続エラーが発生しました。理由：")
+    st.warning(str(e))
     st.stop()
 
-# --- 2. 調査実行セクション ---
-all_rows = list_ws.get_all_values()
-if len(all_rows) > 1:
-    targets = all_rows[1:]
-    
-    if st.button("🚀 凍結確認を開始"):
+# --- 2. 実行ボタン表示 ---
+if st.button("🚀 凍結確認を開始"):
+    all_data = list_ws.get_all_values()
+    if len(all_data) > 1:
+        targets = all_data[1:]
         progress_bar = st.progress(0)
-        status_text = st.empty()
         time_text = st.empty()
         start_time = time.time()
         
         for i, row in enumerate(targets):
             # 残り時間の計算
             elapsed = time.time() - start_time
-            avg = elapsed / (i + 1) if i > 0 else 1.5
-            rem_sec = int((len(targets) - (i + 1)) * avg)
-            m, s = divmod(rem_sec, 60)
+            avg = elapsed / (i + 1) if i > 0 else 1.2
+            rem = int((len(targets) - (i + 1)) * avg)
+            time_text.info(f"⏳ 予想残り時間: 約 {rem // 60}分 {rem % 60}秒")
             
-            time_text.info(f"⏳ 予想残り時間: 約 {m}分 {s}秒")
-            target_id = row[0]
-            status_text.text(f"調査中: {target_id}")
-            
-            # 生存確認
+            # 生存確認実行
             try:
-                res = requests.get(f"https://www.threads.net/@{target_id}", timeout=10)
+                res = requests.get(f"https://www.threads.net/@{row[0]}", timeout=10)
                 result = "生存" if res.status_code == 200 else "凍結/削除"
             except:
-                result = "通信エラー"
+                result = "エラー"
             
             list_ws.update_cell(i + 2, 2, result)
             progress_bar.progress((i + 1) / len(targets))
             time.sleep(1)
             
         time_text.empty()
-        status_text.success("✅ 調査が完了しました！シートを確認してください。")
+        st.success("✅ 調査完了！シートを確認してください。")
         st.balloons()
-else:
-    st.info("スプレッドシートにIDを入力してください。")
