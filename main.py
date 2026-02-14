@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 import requests
 import time
+import json
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査サイト", layout="wide")
@@ -10,30 +11,45 @@ st.title("🌐 Threads 生存確認ツール")
 # --- 1. Google接続設定 ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    
-    # 【ここが解決のポイント】貼り付け時に混ざる「見えないゴミ」を自動で掃除します
-    sa_info = dict(st.secrets["gcp_service_account"])
-    # 文字としての \n を、本物の改行に変換し、余計な空白も削除します
-    sa_info["private_key"] = sa_info["private_key"].replace("\\n", "\n").strip()
-    
+    # 複雑な設定を一つの箱（json_data）から取り出します
+    sa_info = json.loads(st.secrets["gcp_service_account"]["json_data"])
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
+    
     sheet = gc.open("Threads調査ツール")
     list_ws = sheet.worksheet("調査リスト")
     proxy_ws = sheet.worksheet("プロキシ")
     st.success("✅ スプレッドシートとの連携に成功しました！")
 except Exception as e:
     st.error("❌ 接続エラーが発生しています。")
-    st.warning(f"エラー内容: {str(e)}")
+    st.warning(f"理由: {str(e)}")
     st.stop()
 
-# --- 2. データ読み込みと実行ボタン ---
+# --- 2. データ読み込み ---
 all_data = list_ws.get_all_values()
 if len(all_data) > 1:
     rows = all_data[1:]
     proxies = [row[0] for row in proxy_ws.get_all_values()[1:] if row]
+
+    st.sidebar.header("📊 現在の状況")
+    st.sidebar.write(f"調査対象: {len(rows)} 件")
+
     if st.button("🚀 凍結確認を開始"):
-        # 調査ロジック（以下略）
-        st.write("調査を開始しました...")
+        progress_bar = st.progress(0)
+        for i, row in enumerate(rows):
+            target_id = row[0]
+            url = f"https://www.threads.net/@{target_id}"
+            try:
+                res = requests.get(url, timeout=10)
+                result = "生存" if res.status_code == 200 else "凍結/削除"
+            except:
+                result = "エラー"
+            
+            list_ws.update_cell(i + 2, 2, result)
+            progress_bar.progress((i + 1) / len(rows))
+            time.sleep(1)
+            
+        st.success("✅ 全ての調査が完了しました！")
+        st.balloons()
 else:
-    st.info("スプレッドシートにIDを入力してください。")
+    st.info("調査リストにIDを入力してください。")
