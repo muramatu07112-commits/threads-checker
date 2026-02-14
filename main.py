@@ -2,60 +2,31 @@ import streamlit as st
 import gspread
 import requests
 import time
-import re
+import json
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Threads調査ツール", layout="wide")
 st.title("🌐 Threads 生存確認ツール")
 
-# --- 1. Google接続設定（最終・自動洗浄版） ---
+# --- 1. Google接続設定（文字列一括読み込み版） ---
 try:
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # Secretsから辞書としてデータを取得
-    # （見出しがあってもなくても、JSONでも、柔軟に対応して読み込みます）
-    if "gcp_service_account" in st.secrets:
-        sa_info = dict(st.secrets["gcp_service_account"])
-    elif "gcp_json" in st.secrets:
-        import json
-        sa_info = json.loads(st.secrets["gcp_json"])
+    # Secretsから "threads_key" という名前の「ただの文字列」を読み込む
+    if "threads_key" in st.secrets:
+        key_string = st.secrets["threads_key"]
+        # その文字列をJSON（プログラムが読める辞書）に変換する
+        sa_info = json.loads(key_string)
     else:
-        # フラット形式（直書き）の場合
-        sa_info = dict(st.secrets)
-
-    # ---------------------------------------------------------
-    # 【ここがエラー撲滅の核心】 鍵データの完全洗浄ロジック
-    # ---------------------------------------------------------
-    raw_key = sa_info.get("private_key", "")
-    
-    # 1. "\n" という「文字」があれば消す（これが諸悪の根源でした）
-    raw_key = raw_key.replace("\\n", "")
-    
-    # 2. ヘッダーとフッターを一旦削除して、中身だけにする
-    raw_key = raw_key.replace("-----BEGIN PRIVATE KEY-----", "")
-    raw_key = raw_key.replace("-----END PRIVATE KEY-----", "")
-    
-    # 3. スペース、改行、バックスラッシュなど、不要な記号をすべて消滅させる
-    #    残るのは純粋な「英数字と記号(+,/,=)」だけになります
-    import re
-    clean_body = re.sub(r'[^a-zA-Z0-9+/=]', '', raw_key)
-    
-    # 4. 正しい形式（64文字ごとの改行）でヘッダー・フッターを付け直す
-    formatted_key = "-----BEGIN PRIVATE KEY-----\n"
-    for i in range(0, len(clean_body), 64):
-        formatted_key += clean_body[i:i+64] + "\n"
-    formatted_key += "-----END PRIVATE KEY-----\n"
-    
-    # 洗浄した鍵をセット
-    sa_info["private_key"] = formatted_key
-    # ---------------------------------------------------------
+        st.error("設定エラー: Secretsに 'threads_key' が保存されていません。")
+        st.stop()
 
     creds = Credentials.from_service_account_info(sa_info, scopes=scope)
     gc = gspread.authorize(creds)
     sheet = gc.open("Threads調査ツール")
     list_ws = sheet.worksheet("調査リスト")
     
-    # プロキシシートの読み込み（シートが無い場合のエラー回避）
+    # プロキシシートの読み込み（念のためエラー回避付き）
     try:
         proxy_ws = sheet.worksheet("プロキシ")
     except:
@@ -66,7 +37,6 @@ try:
 except Exception as e:
     st.error("❌ 接続エラーが発生しました。")
     st.warning(f"理由: {str(e)}")
-    st.info("※このエラーが続く場合、スプレッドシートのファイル名が合っているか、共有設定ができているか確認してください。")
     st.stop()
 
 # --- 2. 調査実行セクション ---
